@@ -303,7 +303,13 @@ impl<S: TrieBackendStorage<H>, H: Hasher, C: TrieCacheProvider<H>> TrieBackendEs
 	) -> R {
 		let storage_root = storage_root.unwrap_or_else(|| self.root);
 		let mut cache = self.trie_node_cache.as_ref().map(|c| c.as_trie_db_cache(storage_root));
-		let cache = cache.as_mut().map(|c| c as _);
+		let cache: Option<&mut dyn TrieCache<NodeCodec<H>>> = match cache.as_mut() {
+			Some(c) => {
+				let r: &mut dyn TrieCache<NodeCodec<H>> = c;
+				Some(r)
+			}
+			None => None,
+		};
 
 		#[cfg(feature = "std")]
 		{

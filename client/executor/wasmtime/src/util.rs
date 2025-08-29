@@ -144,10 +144,11 @@ pub(crate) fn replace_strategy_if_broken(strategy: &mut InstantiationStrategy) {
 		InstantiationStrategy::LegacyInstanceReuse => InstantiationStrategy::RecreateInstance,
 	};
 
-	use std::sync::OnceLock;
-	static IS_OK: OnceLock<bool> = OnceLock::new();
+	use std::sync::{Once, atomic::{AtomicBool, Ordering}};
+	static INIT: Once = Once::new();
+	static OK: AtomicBool = AtomicBool::new(false);
 
-	let is_ok = IS_OK.get_or_init(|| {
+	INIT.call_once(|| {
 		let is_ok = match is_madvise_working() {
 			Ok(is_ok) => is_ok,
 			Err(error) => {
@@ -161,9 +162,10 @@ pub(crate) fn replace_strategy_if_broken(strategy: &mut InstantiationStrategy) {
 			log::warn!("You're running on a system with a broken `madvise(MADV_DONTNEED)` implementation. This will result in lower performance.");
 		}
 
-		is_ok
+		OK.store(is_ok, Ordering::Relaxed);
 	});
 
+	let is_ok = OK.load(Ordering::Relaxed);
 	if !is_ok {
 		*strategy = replacement_strategy;
 	}
