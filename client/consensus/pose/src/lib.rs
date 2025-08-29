@@ -66,7 +66,7 @@ pub struct PreRuntimeDigest {
 }
 
 /// Kind of vote in PoSE finality gadget.
-#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug, Hash)]
 pub enum VoteKind {
     Prevote,
     Precommit,
@@ -613,7 +613,8 @@ where
                                     let entry = guard.entry(key).or_insert_with(HashSet::new);
                                     entry.insert(v.validator_idx);
                                     let n = authorities.len().max(1);
-                                    if entry.len() >= quorum_threshold(n) {
+                                    let t = quorum_threshold(n);
+                                    if entry.len() >= t {
                                         let mut bitmap = Vec::new();
                                         for i in entry.iter() {
                                             let i = *i as usize;
@@ -656,7 +657,7 @@ where
         // Build inherents (timestamp from system time).
         let timestamp = TimestampInherent::from_system_time();
         let mut inherent_data = InherentData::new();
-        if let Err(e) = timestamp.provide_inherent_data(&mut inherent_data) {
+        if let Err(e) = timestamp.provide_inherent_data(&mut inherent_data).await {
             warn!(target: "pose", "Failed to provide timestamp inherent: {:?}", e);
             continue;
         }
