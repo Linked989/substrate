@@ -141,34 +141,55 @@ impl Proof {
 /// Statement attributes. Each statement is a list of 0 or more fields. Fields may only appear once
 /// and in the order declared here.
 #[derive(Encode, Decode, TypeInfo, sp_core::RuntimeDebug, Clone, PartialEq, Eq)]
-#[repr(u8)]
 pub enum Field {
-	/// Statement proof.
-	AuthenticityProof(Proof) = 0,
-	/// An identifier for the key that `Data` field may be decrypted with.
-	DecryptionKey(DecryptionKey) = 1,
-	/// Priority when competing with other messages from the same sender.
-	Priority(u32) = 2,
-	/// Account channel to use. Only one message per `(account, channel)` pair is allowed.
-	Channel(Channel) = 3,
-	/// First statement topic.
-	Topic1(Topic) = 4,
-	/// Second statement topic.
-	Topic2(Topic) = 5,
-	/// Third statement topic.
-	Topic3(Topic) = 6,
-	/// Fourth statement topic.
-	Topic4(Topic) = 7,
-	/// Additional data.
-	Data(Vec<u8>) = 8,
+    /// Statement proof.
+    AuthenticityProof(Proof),
+    /// An identifier for the key that `Data` field may be decrypted with.
+    DecryptionKey(DecryptionKey),
+    /// Priority when competing with other messages from the same sender.
+    Priority(u32),
+    /// Account channel to use. Only one message per `(account, channel)` pair is allowed.
+    Channel(Channel),
+    /// First statement topic.
+    Topic1(Topic),
+    /// Second statement topic.
+    Topic2(Topic),
+    /// Third statement topic.
+    Topic3(Topic),
+    /// Fourth statement topic.
+    Topic4(Topic),
+    /// Additional data.
+    Data(Vec<u8>),
+}
+
+#[derive(Copy, Clone)]
+#[repr(u8)]
+enum FieldTag {
+    AuthenticityProof = 0,
+    DecryptionKey = 1,
+    Priority = 2,
+    Channel = 3,
+    Topic1 = 4,
+    Topic2 = 5,
+    Topic3 = 6,
+    Topic4 = 7,
+    Data = 8,
 }
 
 impl Field {
-	fn discriminant(&self) -> u8 {
-		// This is safe for repr(u8)
-		// see https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
-		unsafe { *(self as *const Self as *const u8) }
-	}
+    fn discriminant(&self) -> u8 {
+        match self {
+            Field::AuthenticityProof(_) => FieldTag::AuthenticityProof as u8,
+            Field::DecryptionKey(_) => FieldTag::DecryptionKey as u8,
+            Field::Priority(_) => FieldTag::Priority as u8,
+            Field::Channel(_) => FieldTag::Channel as u8,
+            Field::Topic1(_) => FieldTag::Topic1 as u8,
+            Field::Topic2(_) => FieldTag::Topic2 as u8,
+            Field::Topic3(_) => FieldTag::Topic3 as u8,
+            Field::Topic4(_) => FieldTag::Topic4 as u8,
+            Field::Data(_) => FieldTag::Data as u8,
+        }
+    }
 }
 
 /// Statement structure.
