@@ -15,10 +15,8 @@ sc-transaction-pool = { version = "4.0.0-dev", path = "../../transaction-pool" }
 sp-blockchain = { version = "4.0.0-dev", path = "../../../primitives/blockchain" }
 sp-block-builder = { version = "4.0.0-dev", path = "../../../primitives/block-builder" }
 parity-scale-codec = { version = "3.6.1", features = ["derive"] }
-bls12_381 = "0.8"
-schnorrkel = "0.10"
 sp-application-crypto = { version = "23.0.0", path = "../../../primitives/application-crypto" }
-thiserror = "1.0"
+substrate-prometheus-endpoint = { version = "0.10.0-dev", path = "../../../utils/prometheus" }
 
 [lib]
 name = "sc_consensus_pose"

@@ -48,12 +48,6 @@ pub mod pose_bls {
     pub type AuthoritySignature = Signature;
 }
 
-// Keep explicit deps referenced to avoid accidental removal; real usage comes later.
-#[allow(unused_imports)]
-use bls12_381 as _;
-#[allow(unused_imports)]
-use schnorrkel as _;
-
 /// Alias for a generic 32-byte account identifier used across Substrate.
 pub type AccountId = sp_core::crypto::AccountId32;
 
@@ -131,21 +125,30 @@ pub fn topic_name(kind: TopicKind) -> String {
 }
 
 /// Validation errors for incoming PoSE gossip messages.
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("message too large: {0} > {1}")]
     MessageTooLarge(usize, usize),
-    #[error("SCALE decode failed")]
     Decode,
-    #[error("unexpected epoch: got {got}, expected {expected}")]
     WrongEpoch { got: u64, expected: u64 },
-    #[error("unexpected round: got {got}, expected {expected}")]
     WrongRound { got: u64, expected: u64 },
-    #[error("unexpected group: got {got:?}, expected {expected:?}")]
     WrongGroup { got: Option<u64>, expected: Option<u64> },
-    #[error("unexpected vote kind")]
     WrongVoteKind,
 }
+
+impl core::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ValidationError::MessageTooLarge(got, max) => write!(f, "message too large: {} > {}", got, max),
+            ValidationError::Decode => write!(f, "SCALE decode failed"),
+            ValidationError::WrongEpoch { got, expected } => write!(f, "unexpected epoch: got {}, expected {}", got, expected),
+            ValidationError::WrongRound { got, expected } => write!(f, "unexpected round: got {}, expected {}", got, expected),
+            ValidationError::WrongGroup { got, expected } => write!(f, "unexpected group: got {:?}, expected {:?}", got, expected),
+            ValidationError::WrongVoteKind => write!(f, "unexpected vote kind"),
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
 
 /// Context for validating messages.
 #[derive(Clone, Debug)]

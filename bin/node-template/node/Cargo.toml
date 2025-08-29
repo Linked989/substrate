@@ -50,9 +50,6 @@ sc-basic-authorship = { version = "0.10.0-dev", path = "../../../client/basic-au
 substrate-frame-rpc-system = { version = "4.0.0-dev", path = "../../../utils/frame/rpc/system" }
 pallet-transaction-payment-rpc = { version = "4.0.0-dev", path = "../../../frame/transaction-payment/rpc/" }
 sc-consensus-pose = { path = "../../../client/consensus/pose", version = "0.1.0" }
-bls12_381 = "0.8"
-schnorrkel = "0.10"
-parity-scale-codec = { version = "3.6.1", features=["derive"] }
 
 # These dependencies are used for runtime benchmarking
 frame-benchmarking = { version = "4.0.0-dev", path = "../../../frame/benchmarking" }
