@@ -17,7 +17,7 @@ sp-block-builder = { version = "4.0.0-dev", path = "../../../primitives/block-bu
 parity-scale-codec = { version = "3.6.1", features = ["derive"] }
 bls12_381 = "0.8"
 schnorrkel = "0.10"
-sp-application-crypto = { version = "25.0.0", path = "../../../primitives/application-crypto" }
+sp-application-crypto = { version = "23.0.0", path = "../../../primitives/application-crypto" }
 thiserror = "1.0"
 
 [lib]
