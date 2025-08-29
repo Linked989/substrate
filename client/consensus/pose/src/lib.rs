@@ -3,10 +3,16 @@
 #![forbid(unsafe_code)]
 
 use parity_scale_codec::{Decode, Encode};
+use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use futures::StreamExt as _;
+use sc_network::NetworkService;
+use sc_network_common::ExHashT;
 use sc_network::config::NonDefaultSetConfig;
 use sc_network::types::ProtocolName;
 use sp_core::{crypto::KeyTypeId, H256};
 use sp_runtime::{ConsensusEngineId, RuntimeDebug};
+use sp_consensus::{self, BlockOrigin};
 
 /// Consensus engine identifier for PoSE.
 /// Chosen 4-byte ID: "POSE".
@@ -270,6 +276,13 @@ impl PoSEProposer {
 use sc_consensus::import_queue::{BasicQueue, DefaultImportQueue, Verifier as ImportVerifier};
 use sc_consensus::import_queue::{BoxBlockImport, BoxJustificationImport};
 use sp_runtime::traits::Block as BlockT;
+use sc_block_builder::{BlockBuilderProvider, RecordProof};
+use sp_blockchain::HeaderBackend;
+use sp_api::{ApiExt, ProvideRuntimeApi};
+use sp_inherents::InherentData;
+use sp_timestamp::InherentDataProvider as TimestampInherent;
+use sp_runtime::DigestItem;
+use sp_core::crypto::UncheckedFrom;
 
 /// Threshold t=floor(2n/3)+1 for a given committee size.
 pub fn quorum_threshold(n: usize) -> usize { (2 * n) / 3 + 1 }
@@ -296,18 +309,28 @@ impl<B: BlockT> ImportVerifier<B> for PoSEVerifier {
                 sp_runtime::DigestItem::PreRuntime(id, data) if *id == POSE_ENGINE_ID => {
                     let pre = PreRuntimeDigest::decode(&mut &data[..])
                         .map_err(|_| "bad PoSE pre-runtime digest".to_string())?;
-                    if pre.epoch != self.expected_epoch { return Err("wrong epoch".into()) }
+                    if self.expected_epoch != u64::MAX && pre.epoch != self.expected_epoch {
+                        return Err("wrong epoch".into())
+                    }
                 }
                 sp_runtime::DigestItem::Consensus(id, data) if *id == POSE_ENGINE_ID => {
                     // Try vote or justification
                     if let Ok(v) = VoteDigest::decode(&mut &data[..]) {
-                        if v.epoch != self.expected_epoch { return Err("wrong epoch".into()) }
-                        if v.round != self.expected_round { return Err("wrong round".into()) }
+                        if self.expected_epoch != u64::MAX && v.epoch != self.expected_epoch {
+                            return Err("wrong epoch".into())
+                        }
+                        if self.expected_round != u64::MAX && v.round != self.expected_round {
+                            return Err("wrong round".into())
+                        }
                         // Size check
                         if data.len() > limits::VOTE_MAX { return Err("vote too large".into()) }
                     } else if let Ok(j) = Justification::decode(&mut &data[..]) {
-                        if j.epoch != self.expected_epoch { return Err("wrong epoch".into()) }
-                        if j.round != self.expected_round { return Err("wrong round".into()) }
+                        if self.expected_epoch != u64::MAX && j.epoch != self.expected_epoch {
+                            return Err("wrong epoch".into())
+                        }
+                        if self.expected_round != u64::MAX && j.round != self.expected_round {
+                            return Err("wrong round".into())
+                        }
                         if data.len() > limits::JUSTIFICATION_MAX { return Err("justification too large".into()) }
                         // Quorum check placeholder
                         if self.committee_size > 0 {
@@ -341,6 +364,16 @@ pub fn build_import_queue<B: BlockT>(
 ) -> DefaultImportQueue<B> {
     let verifier = PoSEVerifier { expected_epoch, expected_round, committee_size };
     BasicQueue::new(verifier, block_import, justification_import, spawner, registry)
+}
+
+/// Construct a PoSE justification importer which finalizes blocks when PoSE justifications arrive.
+pub fn justification_import<B, C, CB>(client: Arc<C>) -> sc_consensus::import_queue::BoxJustificationImport<B>
+where
+    B: BlockT + 'static,
+    C: sc_client_api::backend::Finalizer<B, CB> + sp_blockchain::HeaderBackend<B> + Send + Sync + 'static,
+    CB: sc_client_api::backend::Backend<B> + 'static,
+{
+    Box::new(PoseJustificationImport::<C, B, CB> { client, _m: core::marker::PhantomData })
 }
 
 //
@@ -451,4 +484,270 @@ impl VoteAggregator {
 
 impl Default for VoteAggregator {
     fn default() -> Self { Self::new(0) }
+}
+
+//
+// Gossip wire types and helpers
+//
+#[derive(Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+pub struct Proposal {
+    pub epoch: u64,
+    pub parent: H256,
+    pub digest: Vec<u8>,
+    pub block_parts: Vec<u8>,
+    pub block_hash: H256,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+pub struct Vote {
+    pub kind: VoteKind,
+    pub round: u64,
+    pub epoch: u64,
+    pub block_hash: H256,
+    pub sig_share: Vec<u8>,
+    pub validator_idx: u32,
+}
+
+#[derive(Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+pub struct AggVote {
+    pub kind: VoteKind,
+    pub round: u64,
+    pub epoch: u64,
+    pub block_hash: H256,
+    pub agg_sig: [u8; 96],
+    pub bitmap: Vec<u8>,
+}
+
+#[derive(Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+pub enum WireMsg {
+    Proposal(Proposal),
+    Vote(Vote),
+    AggVote(AggVote),
+}
+
+fn broadcast<B, H>(network: &NetworkService<B, H>, peers: &Vec<H::PeerId>, protocol: &ProtocolName, msg: WireMsg)
+where
+    B: BlockT + 'static,
+    H: ExHashT,
+{
+    let payload = msg.encode();
+    for p in peers.iter().cloned() {
+        network.write_notification(p, protocol.clone(), payload.clone());
+    }
+}
+
+//
+// PoSE authoring loop (prototype)
+//
+use log::{info, warn};
+
+/// Parameters to start the PoSE authoring task.
+pub struct StartParams<B: BlockT, BI, C, TP> {
+    pub client: Arc<C>,
+    pub pool: Arc<TP>,
+    pub block_import: BI,
+    pub authorities: Vec<sp_core::H256>,
+    pub local_id: sp_core::H256,
+    pub slot_duration: Duration,
+    pub _phantom: core::marker::PhantomData<B>,
+    pub network: Arc<NetworkService<B, sc_network::config::ExHash>>,
+}
+
+/// Start a very simple slot-based authoring loop that produces blocks periodically.
+/// This is a PoC: it builds inherents (timestamp) and imports the produced block.
+pub async fn start<B, BI, C, TP, CB>(mut params: StartParams<B, BI, C, TP>)
+where
+    B: BlockT + 'static,
+    BI: sc_consensus::block_import::BlockImport<B, Error = sp_consensus::Error> + Send + Sync + 'static,
+    C: BlockBuilderProvider<CB, B, C> + HeaderBackend<B> + ProvideRuntimeApi<B> + Send + Sync + 'static,
+    C::Api: ApiExt<B> + sp_block_builder::BlockBuilderApi<B>,
+    CB: sc_client_api::backend::Backend<B> + Send + Sync + 'static,
+    TP: sc_transaction_pool_api::TransactionPool<Block = B> + 'static,
+{
+    let StartParams { client, mut block_import, slot_duration, local_id, authorities, network, .. } = params;
+    let mut slot_counter: u64 = 0;
+    let protocol = protocol_name();
+    let mut events = network.event_stream("pose");
+    let peers: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(Vec::new()));
+    type VoteKey = (VoteKind, u64, u64, sp_core::H256);
+    let votes: Arc<Mutex<HashMap<VoteKey, HashSet<u32>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let local_index: u32 = authorities
+        .iter()
+        .position(|h| *h == local_id)
+        .map(|i| i as u32)
+        .unwrap_or(0);
+
+    loop {
+        // Drain some network events without blocking.
+        while let Some(ev) = events.next().now_or_never().flatten() {
+            match ev {
+                sc_network::event::Event::NotificationStreamOpened { remote, protocol: p, .. } => {
+                    if p == protocol { peers.lock().unwrap().push(remote); }
+                }
+                sc_network::event::Event::NotificationsReceived { remote: _, messages } => {
+                    for (p, bytes) in messages {
+                        if p != protocol { continue }
+                        if let Ok(msg) = WireMsg::decode(&mut &bytes[..]) {
+                            match msg {
+                                WireMsg::Proposal(prop) => {
+                                    if prop.epoch <= slot_counter {
+                                        let v = Vote {
+                                            kind: VoteKind::Prevote,
+                                            round: 0,
+                                            epoch: prop.epoch,
+                                            block_hash: prop.block_hash,
+                                            sig_share: vec![],
+                                            validator_idx: local_index,
+                                        };
+                                        broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Vote(v));
+                                    }
+                                }
+                                WireMsg::Vote(v) => {
+                                    let key = (v.kind, v.round, v.epoch, v.block_hash);
+                                    let mut guard = votes.lock().unwrap();
+                                    let entry = guard.entry(key).or_insert_with(HashSet::new);
+                                    entry.insert(v.validator_idx);
+                                    let n = authorities.len().max(1);
+                                    if entry.len() >= quorum_threshold(n) {
+                                        let mut bitmap = Vec::new();
+                                        for i in entry.iter() {
+                                            let i = *i as usize;
+                                            let byte = i / 8; let bit = i % 8;
+                                            if bitmap.len() <= byte { bitmap.resize(byte + 1, 0); }
+                                            bitmap[byte] |= 1 << bit;
+                                        }
+                                        let agg = AggVote {
+                                            kind: v.kind,
+                                            round: v.round,
+                                            epoch: v.epoch,
+                                            block_hash: v.block_hash,
+                                            agg_sig: [0u8;96],
+                                            bitmap,
+                                        };
+                                        broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::AggVote(agg));
+                                    }
+                                }
+                                WireMsg::AggVote(_agg) => {
+                                    // For PoC, nothing to do; local author sets justification.
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Wait for the next slot.
+        futures_timer::Delay::new(slot_duration).await;
+
+        // Determine the parent to build on.
+        let info = client.info();
+        let parent_hash = info.best_hash;
+        let parent_header = match client.header(parent_hash) {
+            Ok(Some(h)) => h,
+            _ => continue,
+        };
+
+        // Build inherents (timestamp from system time).
+        let timestamp = TimestampInherent::from_system_time();
+        let mut inherent_data = InherentData::new();
+        if let Err(e) = timestamp.provide_inherent_data(&mut inherent_data) {
+            warn!(target: "pose", "Failed to provide timestamp inherent: {:?}", e);
+            continue;
+        }
+
+        // Build PoSE pre-runtime digest: epoch=slot_counter, leader derived from local_id.
+        let leader: AccountId = AccountId::unchecked_from(local_id);
+        let pre = PreRuntimeDigest { epoch: slot_counter, seed: H256::zero(), leader };
+        let mut digests = sp_runtime::Digest::default();
+        digests.push(DigestItem::PreRuntime(POSE_ENGINE_ID, pre.encode()));
+
+        // Build the block directly using the block builder, with PoSE pre-runtime digests.
+        let mut builder = match client.new_block_at(parent_hash, digests, RecordProof::No) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(target: "pose", "new_block_at error: {:?}", e);
+                continue;
+            }
+        };
+
+        // Create inherents and include them.
+        match builder.create_inherents(inherent_data) {
+            Ok(inherents) => {
+                for inherent in inherents {
+                    if let Err(e) = builder.push(inherent) {
+                        warn!(target: "pose", "Failed to push inherent: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(target: "pose", "create_inherents error: {:?}", e);
+                continue;
+            }
+        }
+
+        // Build block and import it.
+        let (block, storage_changes, _proof) = match builder.build().map(|b| b.into_inner()) {
+            Ok(x) => x,
+            Err(e) => {
+                warn!(target: "pose", "block build error: {:?}", e);
+                continue;
+            }
+        };
+
+        let mut import_params = sc_consensus::block_import::BlockImportParams::new(
+            BlockOrigin::Own,
+            block.header().clone(),
+        );
+        import_params.body = Some(block.extrinsics().to_vec());
+        import_params.state_action = sc_consensus::block_import::StateAction::ApplyChanges(
+            sc_consensus::block_import::StorageChanges::Changes(storage_changes),
+        );
+        import_params.fork_choice = Some(sc_consensus::block_import::ForkChoiceStrategy::LongestChain);
+        // Emit a PoSE justification once we "commit". For PoC, synthesize quorum bitmap.
+        let n = authorities.len().max(1);
+        let t = quorum_threshold(n);
+        let mut bitmap = Vec::new();
+        for i in 0..t {
+            let byte = i / 8;
+            let bit = i % 8;
+            if bitmap.len() <= byte { bitmap.resize(byte + 1, 0); }
+            bitmap[byte] |= 1 << bit;
+        }
+        let j = Justification { round: 0, epoch: slot_counter, agg_sig: [0u8; 96], bitmap };
+        import_params.justifications = Some(sp_runtime::Justifications::from((POSE_ENGINE_ID, j.encode())));
+        // Mark as finalized to advance finality in this PoC.
+        import_params.finalized = true;
+
+        // Gossip: proposal and local votes for this block.
+        let prop = Proposal {
+            epoch: slot_counter,
+            parent: parent_hash,
+            digest: Vec::new(),
+            block_parts: Vec::new(),
+            block_hash: block.header().hash(),
+        };
+        broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Proposal(prop));
+        let prevote = Vote { kind: VoteKind::Prevote, round: 0, epoch: slot_counter, block_hash: block.header().hash(), sig_share: vec![], validator_idx: local_index };
+        broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Vote(prevote));
+        let precommit = Vote { kind: VoteKind::Precommit, round: 0, epoch: slot_counter, block_hash: block.header().hash(), sig_share: vec![], validator_idx: local_index };
+        broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Vote(precommit));
+
+        match block_import.import_block(import_params).await {
+            Ok(sc_consensus::block_import::ImportResult::Imported(aux)) => {
+                let num = block.header().number().clone();
+                let hash = block.header().hash();
+                info!(target: "pose", "POSE: authored block #{} ({:?}) new_best={}.", num, hash, aux.is_new_best);
+            }
+            Ok(other) => {
+                warn!(target: "pose", "import result: {:?}", other);
+            }
+            Err(e) => {
+                warn!(target: "pose", "import error: {:?}", e);
+            }
+        }
+
+        // Advance slot counter after each attempt.
+        slot_counter = slot_counter.wrapping_add(1);
+    }
 }

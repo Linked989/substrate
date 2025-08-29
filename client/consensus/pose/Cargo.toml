@@ -12,6 +12,7 @@ sp-core = { version = "21.0.0", path = "../../../primitives/core" }
 sc-network = { version = "0.10.0-dev", path = "../../network" }
 sc-client-api = { version = "4.0.0-dev", path = "../../api" }
 sc-transaction-pool = { version = "4.0.0-dev", path = "../../transaction-pool" }
+sc-transaction-pool-api = { version = "4.0.0-dev", path = "../../transaction-pool/api" }
 sp-blockchain = { version = "4.0.0-dev", path = "../../../primitives/blockchain" }
 sp-block-builder = { version = "4.0.0-dev", path = "../../../primitives/block-builder" }
 parity-scale-codec = { version = "3.6.1", features = ["derive"] }
@@ -19,6 +20,12 @@ sp-application-crypto = { version = "23.0.0", path = "../../../primitives/applic
 prometheus-endpoint = { package = "substrate-prometheus-endpoint", version = "0.10.0-dev", path = "../../../utils/prometheus" }
 scale-info = { version = "2.5.0", default-features = false, features = ["derive"] }
 async-trait = "0.1.57"
+sc-block-builder = { version = "0.10.0-dev", path = "../../block-builder" }
+sp-inherents = { version = "4.0.0-dev", path = "../../../primitives/inherents" }
+sp-timestamp = { version = "4.0.0-dev", path = "../../../primitives/timestamp" }
+futures-timer = "3"
+futures = "0.3"
+sc-network-common = { version = "0.10.0-dev", path = "../../network/common" }
 
 [lib]
 name = "sc_consensus_pose"

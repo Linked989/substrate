@@ -15,16 +15,18 @@ use sc_consensus::{
 };
 use sp_consensus::Error as ConsensusError;
 use parity_scale_codec::Decode;
+use sp_core::H256;
+use sc_service::config::Role;
+use sc_service::KeystoreContainer;
 use async_trait::async_trait;
 use sp_runtime::traits::Header as _;
 use sc_consensus_pose::{
-    build_import_queue as pose_build_import_queue, peers_set_config as pose_peers_set,
+    build_import_queue as pose_build_import_queue,
     Justification as PoseJustification, PreRuntimeDigest as PosePreDigest,
-    VoteDigest as PoseVoteDigest, POSE_ENGINE_ID, Pacemaker, PacemakerConfig,
+    VoteDigest as PoseVoteDigest, POSE_ENGINE_ID,
+    pose_vrf, pose_bls,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
-use sp_keystore::Keystore;
-use sp_keyring::Sr25519Keyring;
+// use std::sync::atomic::{AtomicU64, Ordering};
 
 // Our native executor instance.
 pub struct ExecutorDispatch;
@@ -153,14 +155,15 @@ pub fn new_partial(
         client.clone(),
     );
 
-    // Use a minimal BasicQueue with no-op import to allow the node to start.
-    // Build PoSE import queue with relaxed verifier expectations (accept any epoch/round)
+    // Use a PoSE import queue with relaxed verifier expectations (accept any epoch/round)
+    // and a PoSE justification importer that finalizes blocks when PoSE justifications are seen.
+    let just_import = sc_consensus_pose::justification_import::<Block, _, _>(client.clone());
     let import_queue: sc_consensus::DefaultImportQueue<Block> = pose_build_import_queue(
         u64::MAX,
         u64::MAX,
         3,
         Box::new(NoopBlockImport),
-        None,
+        Some(just_import),
         &task_manager.spawn_essential_handle(),
         config.prometheus_registry(),
     );
@@ -191,8 +194,15 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
     } = new_partial(&config)?;
 
     let mut net_config = sc_network::config::FullNetworkConfiguration::new(&config.network);
-    // Register PoSE notifications protocol
-    net_config.add_notification_protocol(pose_peers_set());
+    // Register PoSE notifications protocol explicitly as "/pose/1"
+    {
+        let mut pose_set = sc_network::config::NonDefaultSetConfig::new(
+            sc_network::types::ProtocolName::from("/pose/1"),
+            8 * 1024, // max notification size
+        );
+        pose_set.allow_non_reserved(64, 64);
+        net_config.add_notification_protocol(pose_set);
+    }
 
     // No GRANDPA networking or warp sync.
 
@@ -258,43 +268,73 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 		telemetry: telemetry.as_mut(),
 	})?;
 
-    // Instantiate PoSE proposer (ordering helper) and pacemaker.
-    let _proposer = sc_consensus_pose::PoSEProposer;
-    // PoSE consensus task (prototype): maintains a local epoch counter and timeouts.
-    let epoch_counter = Arc::new(AtomicU64::new(0));
-    let _epoch_counter_for_rpc = epoch_counter.clone();
-    let mut pacemaker = Pacemaker::new(PacemakerConfig::default());
-
-    // Inject PoSE dev keys into keystore (Alice, Bob, Charlie) for PoC.
-    {
-        let keystore = keystore_container.keystore();
-        for who in [Sr25519Keyring::Alice, Sr25519Keyring::Bob, Sr25519Keyring::Charlie] {
-            let suri = format!("//{}", who);
-            let _ = keystore.sr25519_generate_new(
-                sc_consensus_pose::pose_vrf::KEY_TYPE,
-                Some(&suri),
-            );
-            let _ = keystore.ed25519_generate_new(
-                sc_consensus_pose::pose_bls::KEY_TYPE,
-                Some(&suri),
-            );
+    // Insert dev PoSE keys into keystore (for local/dev networks) based on CLI flags.
+    if role.is_authority() {
+        if let Some(who) = crate::chain_spec::dev_seed_from_args() {
+            ensure_dev_pose_keys(&keystore_container, who);
         }
     }
-    task_manager.spawn_handle().spawn_blocking(
-        "pose-consensus",
-        None,
-        async move {
-            loop {
-                // Placeholder consensus loop; in a full implementation this would:
-                // - run leader election per epoch
-                // - gossip proposals and collect votes
-                // - on commit, submit block import with PoSE justification
-                futures_timer::Delay::new(pacemaker.proposal_timeout()).await;
-                let _ = epoch_counter.fetch_add(1, Ordering::SeqCst);
-            }
-        },
-    );
 
     network_starter.start_network();
+    // After network start, run PoSE authoring loop (PoC)
+    let authorities: Vec<H256> = pose_dev_authorities(); // Step 3 will provide real values
+    let local_id: H256 = pose_local_id(&keystore_container, role.clone()); // Step 3 will provide real logic
+    let slot = std::time::Duration::from_millis(400);
+
+    task_manager.spawn_essential_handle().spawn(
+        "pose-consensus",
+        None,
+        sc_consensus_pose::start::<Block, _, _, _, _>(sc_consensus_pose::StartParams {
+            client: client.clone(),
+            pool: transaction_pool.clone(),
+            block_import: client.clone(),
+            authorities,
+            local_id,
+            slot_duration: slot,
+            _phantom: Default::default(),
+            network: network.clone(),
+        }),
+    );
+
     Ok(task_manager)
+}
+
+// Dev helpers for PoSE.
+fn pose_dev_authorities() -> Vec<H256> { crate::chain_spec::pose_dev_authorities() }
+
+fn pose_local_id(_keystore: &KeystoreContainer, role: Role) -> H256 {
+    // Derive from dev name if validator flags are used; otherwise use "//Full".
+    use sp_core::blake2_256;
+    let tag = if role.is_authority() { crate::chain_spec::dev_seed_from_args().unwrap_or("//Dave") } else { "//Full" };
+    H256::from(blake2_256(tag.as_bytes()))
+}
+
+fn dev_tag_from_args() -> Option<&'static str> {
+    for arg in std::env::args() {
+        let a = arg.to_ascii_lowercase();
+        if a == "--alice" { return Some("//Alice") }
+        if a == "--bob" { return Some("//Bob") }
+        if a == "--charlie" { return Some("//Charlie") }
+        if a == "--dave" { return Some("//Dave") }
+    }
+    None
+}
+
+fn ensure_dev_pose_keys(keystore: &KeystoreContainer, who: &str) {
+    // Only insert if not present. Generate from dev seed for determinism.
+    let vrf = pose_vrf::Pair::from_string(who, None).expect("dev key");
+    let bls = pose_bls::Pair::from_string(who, None).expect("dev key");
+    let store = keystore.keystore();
+    let vrf_pub = vrf.public();
+    let bls_pub = bls.public();
+
+    let need_vrf = !store.has_keys(&[(vrf_pub.as_ref().to_vec(), pose_vrf::KEY_TYPE)]);
+    let need_bls = !store.has_keys(&[(bls_pub.as_ref().to_vec(), pose_bls::KEY_TYPE)]);
+
+    if need_vrf {
+        let _ = store.insert(pose_vrf::KEY_TYPE, &who.to_string(), vrf_pub.as_ref());
+    }
+    if need_bls {
+        let _ = store.insert(pose_bls::KEY_TYPE, &who.to_string(), bls_pub.as_ref());
+    }
 }

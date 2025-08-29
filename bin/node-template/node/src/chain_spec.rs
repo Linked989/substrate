@@ -3,7 +3,7 @@ use node_template_runtime::{
     WASM_BINARY,
 };
 use sc_service::ChainType;
-use sp_core::{sr25519, Pair, Public};
+use sp_core::{sr25519, Pair, Public, H256};
 use sp_runtime::traits::{IdentifyAccount, Verify};
 
 // The URL for the telemetry server.
@@ -136,4 +136,37 @@ fn testnet_genesis(
         },
         transaction_payment: Default::default(),
     }
+}
+
+/// Dev PoSE authorities for local PoC.
+/// Deterministic order: Alice, Bob, Charlie, Dave.
+pub fn pose_dev_authorities() -> Vec<H256> {
+    use sp_core::blake2_256;
+    ["//Alice", "//Bob", "//Charlie", "//Dave"]
+        .iter()
+        .map(|s| H256::from(blake2_256(s.as_bytes())))
+        .collect()
+}
+
+/// Map common dev flags or names to their corresponding dev seed URI.
+/// Returns values like "//Alice", "//Bob", etc.
+pub fn dev_seed_for(name_or_flag: &str) -> Option<&'static str> {
+    match name_or_flag.to_ascii_lowercase().as_str() {
+        "alice" | "--alice" => Some("//Alice"),
+        "bob" | "--bob" => Some("//Bob"),
+        "charlie" | "--charlie" => Some("//Charlie"),
+        "dave" | "--dave" => Some("//Dave"),
+        "eve" | "--eve" => Some("//Eve"),
+        "ferdie" | "--ferdie" => Some("//Ferdie"),
+        _ => None,
+    }
+}
+
+/// Inspect CLI args and return the matching dev seed, if provided via common flags
+/// like `--alice`, `--bob`, etc.
+pub fn dev_seed_from_args() -> Option<&'static str> {
+    for arg in std::env::args() {
+        if let Some(seed) = dev_seed_for(&arg) { return Some(seed) }
+    }
+    None
 }
