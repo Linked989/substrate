@@ -268,7 +268,7 @@ impl PoSEProposer {
 // Import queue: verifier that checks PoSE digests and basic thresholds (no-op crypto)
 //
 use sc_consensus::import_queue::{BasicQueue, DefaultImportQueue, Verifier as ImportVerifier};
-use sc_consensus::{block_import::BoxBlockImport, import_queue::BoxJustificationImport};
+use sc_consensus::import_queue::{BoxBlockImport, BoxJustificationImport};
 use sp_runtime::traits::Block as BlockT;
 
 /// Threshold t=floor(2n/3)+1 for a given committee size.
@@ -289,15 +289,16 @@ impl<B: BlockT> ImportVerifier<B> for PoSEVerifier {
     async fn verify(&mut self, mut block: sc_consensus::block_import::BlockImportParams<B>)
         -> Result<sc_consensus::block_import::BlockImportParams<B>, String>
     {
+        use sp_runtime::traits::Header as _;
         let header = block.header.clone();
         for log in header.digest().logs() {
             match log {
-                sp_runtime::DigestItem::PreRuntime(id, data) if id == &POSE_ENGINE_ID => {
+                sp_runtime::DigestItem::PreRuntime(id, data) if *id == POSE_ENGINE_ID => {
                     let pre = PreRuntimeDigest::decode(&mut &data[..])
                         .map_err(|_| "bad PoSE pre-runtime digest".to_string())?;
                     if pre.epoch != self.expected_epoch { return Err("wrong epoch".into()) }
                 }
-                sp_runtime::DigestItem::Consensus(id, data) if id == &POSE_ENGINE_ID => {
+                sp_runtime::DigestItem::Consensus(id, data) if *id == POSE_ENGINE_ID => {
                     // Try vote or justification
                     if let Ok(v) = VoteDigest::decode(&mut &data[..]) {
                         if v.epoch != self.expected_epoch { return Err("wrong epoch".into()) }
@@ -419,7 +420,7 @@ pub fn elect_leader(authorities: &[VrfAuthorityId], seed: H256) -> Option<VrfAut
 //
 // Vote flow: simple aggregator with quorum threshold producing Justification
 //
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct VoteAggregator {
     pub n: usize,
     pub bitmap: Vec<u8>,
@@ -446,4 +447,8 @@ impl VoteAggregator {
     pub fn into_justification(self, round: u64, epoch: u64) -> Justification {
         Justification { round, epoch, agg_sig: self.agg_sig, bitmap: self.bitmap }
     }
+}
+
+impl Default for VoteAggregator {
+    fn default() -> Self { Self::new(0) }
 }

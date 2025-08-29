@@ -16,7 +16,9 @@ sp-blockchain = { version = "4.0.0-dev", path = "../../../primitives/blockchain"
 sp-block-builder = { version = "4.0.0-dev", path = "../../../primitives/block-builder" }
 parity-scale-codec = { version = "3.6.1", features = ["derive"] }
 sp-application-crypto = { version = "23.0.0", path = "../../../primitives/application-crypto" }
-substrate-prometheus-endpoint = { version = "0.10.0-dev", path = "../../../utils/prometheus" }
+prometheus-endpoint = { package = "substrate-prometheus-endpoint", version = "0.10.0-dev", path = "../../../utils/prometheus" }
+scale-info = { version = "2.5.0", default-features = false, features = ["derive"] }
+async-trait = "0.1.57"
 
 [lib]
 name = "sc_consensus_pose"
