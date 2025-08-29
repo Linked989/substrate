@@ -16,6 +16,7 @@ use sc_consensus::{
 use sp_consensus::Error as ConsensusError;
 use parity_scale_codec::Decode;
 use sp_core::H256;
+use sp_core::Pair; // for Pair::from_string on app-crypto pairs
 use sc_service::config::Role;
 use sc_service::KeystoreContainer;
 use async_trait::async_trait;
