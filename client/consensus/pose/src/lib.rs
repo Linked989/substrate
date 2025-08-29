@@ -6,7 +6,7 @@ use parity_scale_codec::{Decode, Encode};
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet};
 use futures::{StreamExt as _, FutureExt as _};
-use sc_network::NetworkService;
+use sc_network::{NetworkService, NetworkEventStream, NetworkNotification};
 use libp2p::PeerId;
 use sc_network::config::NonDefaultSetConfig;
 use sc_network::types::ProtocolName;
@@ -279,6 +279,8 @@ use sp_runtime::traits::Block as BlockT;
 use sc_block_builder::{BlockBuilderProvider, RecordProof, BlockBuilderApi};
 use sp_blockchain::HeaderBackend;
 use sp_api::{ApiExt, ProvideRuntimeApi};
+use sp_inherents::InherentDataProvider;
+use sp_runtime::traits::Header as _;
 use sp_inherents::InherentData;
 use sp_timestamp::InherentDataProvider as TimestampInherent;
 use sp_runtime::DigestItem;
@@ -565,13 +567,14 @@ where
     C::Api: ApiExt<B> + BlockBuilderApi<B>,
     CB: sc_client_api::backend::Backend<B> + Send + Sync + 'static,
     TP: sc_transaction_pool_api::TransactionPool<Block = B> + 'static,
+    H256: From<<B as BlockT>::Hash>,
 {
     let StartParams { client, mut block_import, slot_duration, local_id, authorities, network, .. } = params;
     let mut slot_counter: u64 = 0;
     let protocol = protocol_name();
     let mut events = network.event_stream("pose");
     let peers: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(Vec::new()));
-    type VoteKey = (VoteKind, u64, u64, sp_core::H256);
+    type VoteKey = (VoteKind, u64, u64, [u8; 32]);
     let votes: Arc<Mutex<HashMap<VoteKey, HashSet<u32>>>> = Arc::new(Mutex::new(HashMap::new()));
     let local_index: u32 = authorities
         .iter()
@@ -605,7 +608,7 @@ where
                                     }
                                 }
                                 WireMsg::Vote(v) => {
-                                    let key = (v.kind, v.round, v.epoch, v.block_hash);
+                                    let key = (v.kind, v.round, v.epoch, *v.block_hash.as_fixed_bytes());
                                     let mut guard = votes.lock().unwrap();
                                     let entry = guard.entry(key).or_insert_with(HashSet::new);
                                     entry.insert(v.validator_idx);
@@ -724,15 +727,15 @@ where
         // Gossip: proposal and local votes for this block.
         let prop = Proposal {
             epoch: slot_counter,
-            parent: parent_hash,
+            parent: H256::from(parent_hash),
             digest: Vec::new(),
             block_parts: Vec::new(),
-            block_hash: block.header().hash(),
+            block_hash: H256::from(block.header().hash()),
         };
         broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Proposal(prop));
-        let prevote = Vote { kind: VoteKind::Prevote, round: 0, epoch: slot_counter, block_hash: block.header().hash(), sig_share: vec![], validator_idx: local_index };
+        let prevote = Vote { kind: VoteKind::Prevote, round: 0, epoch: slot_counter, block_hash: H256::from(block.header().hash()), sig_share: vec![], validator_idx: local_index };
         broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Vote(prevote));
-        let precommit = Vote { kind: VoteKind::Precommit, round: 0, epoch: slot_counter, block_hash: block.header().hash(), sig_share: vec![], validator_idx: local_index };
+        let precommit = Vote { kind: VoteKind::Precommit, round: 0, epoch: slot_counter, block_hash: H256::from(block.header().hash()), sig_share: vec![], validator_idx: local_index };
         broadcast(&*network, &*peers.lock().unwrap(), &protocol, WireMsg::Vote(precommit));
 
         match block_import.import_block(import_params).await {
