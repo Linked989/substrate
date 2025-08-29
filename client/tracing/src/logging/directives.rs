@@ -15,17 +15,41 @@
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
 use parking_lot::Mutex;
-use std::sync::OnceLock;
+use std::mem::MaybeUninit;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Once,
+};
 use tracing_subscriber::{
 	filter::Directive, fmt as tracing_fmt, layer, reload::Handle, EnvFilter, Registry,
 };
 
-// Handle to reload the tracing log filter
-static FILTER_RELOAD_HANDLE: OnceLock<Handle<EnvFilter, SCSubscriber>> = OnceLock::new();
+// Handle to reload the tracing log filter (manual OnceLock replacement)
+static HANDLE_INIT: Once = Once::new();
+static mut FILTER_RELOAD_HANDLE: MaybeUninit<Handle<EnvFilter, SCSubscriber>> = MaybeUninit::uninit();
+static HANDLE_SET: AtomicBool = AtomicBool::new(false);
+
 // Directives that are defaulted to when resetting the log filter
-static DEFAULT_DIRECTIVES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static DEFAULT_INIT: Once = Once::new();
+static mut DEFAULT_DIRECTIVES: MaybeUninit<Mutex<Vec<String>>> = MaybeUninit::uninit();
+
 // Current state of log filter
-static CURRENT_DIRECTIVES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static CURRENT_INIT: Once = Once::new();
+static mut CURRENT_DIRECTIVES: MaybeUninit<Mutex<Vec<String>>> = MaybeUninit::uninit();
+
+fn default_directives() -> &'static Mutex<Vec<String>> {
+    DEFAULT_INIT.call_once(|| unsafe {
+        DEFAULT_DIRECTIVES.write(Mutex::new(Vec::new()));
+    });
+    unsafe { DEFAULT_DIRECTIVES.assume_init_ref() }
+}
+
+fn current_directives() -> &'static Mutex<Vec<String>> {
+    CURRENT_INIT.call_once(|| unsafe {
+        CURRENT_DIRECTIVES.write(Mutex::new(Vec::new()));
+    });
+    unsafe { CURRENT_DIRECTIVES.assume_init_ref() }
+}
 
 /// Add log filter directive(s) to the defaults
 ///
@@ -33,19 +57,13 @@ static CURRENT_DIRECTIVES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 ///
 /// `sync=debug,state=trace`
 pub(crate) fn add_default_directives(directives: &str) {
-	DEFAULT_DIRECTIVES
-		.get_or_init(|| Mutex::new(Vec::new()))
-		.lock()
-		.push(directives.to_owned());
-	add_directives(directives);
+    default_directives().lock().push(directives.to_owned());
+    add_directives(directives);
 }
 
 /// Add directives to current directives
 pub fn add_directives(directives: &str) {
-	CURRENT_DIRECTIVES
-		.get_or_init(|| Mutex::new(Vec::new()))
-		.lock()
-		.push(directives.to_owned());
+    current_directives().lock().push(directives.to_owned());
 }
 
 /// Parse `Directive` and add to default directives if successful.
@@ -59,22 +77,20 @@ pub(crate) fn parse_default_directive(directive: &str) -> super::Result<Directiv
 
 /// Reload the logging filter with the supplied directives added to the existing directives
 pub fn reload_filter() -> Result<(), String> {
-	let mut env_filter = EnvFilter::default();
-	if let Some(current_directives) = CURRENT_DIRECTIVES.get() {
-		// Use join and then split in case any directives added together
-		for directive in current_directives.lock().join(",").split(',').map(|d| d.parse()) {
-			match directive {
-				Ok(dir) => env_filter = env_filter.add_directive(dir),
-				Err(invalid_directive) => {
-					log::warn!(
-						target: "tracing",
-						"Unable to parse directive while setting log filter: {:?}",
-						invalid_directive,
-					);
-				},
-			}
-		}
-	}
+    let mut env_filter = EnvFilter::default();
+    // Use join and then split in case any directives added together
+    for directive in current_directives().lock().join(",").split(',').map(|d| d.parse()) {
+        match directive {
+            Ok(dir) => env_filter = env_filter.add_directive(dir),
+            Err(invalid_directive) => {
+                log::warn!(
+                    target: "tracing",
+                    "Unable to parse directive while setting log filter: {:?}",
+                    invalid_directive,
+                );
+            },
+        }
+    }
 
 	// Set the max logging level for the `log` macros.
 	let max_level_hint =
@@ -82,26 +98,28 @@ pub fn reload_filter() -> Result<(), String> {
 	log::set_max_level(super::to_log_level_filter(max_level_hint));
 
 	log::debug!(target: "tracing", "Reloading log filter with: {}", env_filter);
-	FILTER_RELOAD_HANDLE
-		.get()
-		.ok_or("No reload handle present")?
-		.reload(env_filter)
-		.map_err(|e| format!("{}", e))
+    if !HANDLE_SET.load(Ordering::Acquire) {
+        return Err("No reload handle present".into());
+    }
+    let handle = unsafe { FILTER_RELOAD_HANDLE.assume_init_ref() };
+    handle.reload(env_filter).map_err(|e| format!("{}", e))
 }
 
 /// Resets the log filter back to the original state when the node was started.
 ///
 /// Includes substrate defaults and CLI supplied directives.
 pub fn reset_log_filter() -> Result<(), String> {
-	let directive = DEFAULT_DIRECTIVES.get_or_init(|| Mutex::new(Vec::new())).lock().clone();
-
-	*CURRENT_DIRECTIVES.get_or_init(|| Mutex::new(Vec::new())).lock() = directive;
-	reload_filter()
+    let directive = default_directives().lock().clone();
+    *current_directives().lock() = directive;
+    reload_filter()
 }
 
 /// Initialize FILTER_RELOAD_HANDLE, only possible once
 pub(crate) fn set_reload_handle(handle: Handle<EnvFilter, SCSubscriber>) {
-	let _ = FILTER_RELOAD_HANDLE.set(handle);
+    HANDLE_INIT.call_once(|| unsafe {
+        FILTER_RELOAD_HANDLE.write(handle);
+        HANDLE_SET.store(true, Ordering::Release);
+    });
 }
 
 // The layered Subscriber as built up in `LoggerBuilder::init()`.
