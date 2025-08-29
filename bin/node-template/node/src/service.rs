@@ -10,18 +10,20 @@ use sc_transaction_pool_api::OffchainTransactionPoolFactory;
 use std::{sync::Arc, time::Duration};
 
 use sc_consensus::{
-    import_queue::{BasicQueue, Verifier},
+    import_queue::Verifier,
     block_import::{BlockCheckParams, BlockImport, BlockImportParams, ImportResult},
 };
 use sp_consensus::Error as ConsensusError;
 use parity_scale_codec::Decode;
+use async_trait::async_trait;
+use sp_runtime::traits::Header as _;
 use sc_consensus_pose::{
     build_import_queue as pose_build_import_queue, peers_set_config as pose_peers_set,
     Justification as PoseJustification, PreRuntimeDigest as PosePreDigest,
     VoteDigest as PoseVoteDigest, POSE_ENGINE_ID, Pacemaker, PacemakerConfig,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
-use sp_keystore::SyncCryptoStore;
+use sp_keystore::Keystore;
 use sp_keyring::Sr25519Keyring;
 
 // Our native executor instance.
@@ -53,7 +55,7 @@ type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 // without any consensus engines wired.
 struct NoopVerifier;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Verifier<Block> for NoopVerifier {
     async fn verify(
         &mut self,
@@ -63,10 +65,10 @@ impl Verifier<Block> for NoopVerifier {
         let header = block.header.clone();
         for log in header.digest().logs() {
             match log {
-                sp_runtime::DigestItem::PreRuntime(id, data) if id == &POSE_ENGINE_ID => {
+                sp_runtime::DigestItem::PreRuntime(id, data) if *id == POSE_ENGINE_ID => {
                     let _ = PosePreDigest::decode(&mut &data[..]);
                 }
-                sp_runtime::DigestItem::Consensus(id, data) if id == &POSE_ENGINE_ID => {
+                sp_runtime::DigestItem::Consensus(id, data) if *id == POSE_ENGINE_ID => {
                     // Try decoding as VoteDigest or Justification; ignore errors.
                     let mut tmp = &data[..];
                     if PoseVoteDigest::decode(&mut tmp).is_err() {
@@ -83,7 +85,7 @@ impl Verifier<Block> for NoopVerifier {
 
 struct NoopBlockImport;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl BlockImport<Block> for NoopBlockImport {
     type Error = ConsensusError;
 
@@ -283,16 +285,14 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
     task_manager.spawn_handle().spawn_blocking(
         "pose-consensus",
         None,
-        {
-            move || {
-                loop {
-                    // Placeholder consensus loop; in a full implementation this would:
-                    // - run leader election per epoch
-                    // - gossip proposals and collect votes
-                    // - on commit, submit block import with PoSE justification
-                    std::thread::sleep(pacemaker.proposal_timeout());
-                    let _ = epoch_counter.fetch_add(1, Ordering::SeqCst);
-                }
+        async move {
+            loop {
+                // Placeholder consensus loop; in a full implementation this would:
+                // - run leader election per epoch
+                // - gossip proposals and collect votes
+                // - on commit, submit block import with PoSE justification
+                futures_timer::Delay::new(pacemaker.proposal_timeout()).await;
+                let _ = epoch_counter.fetch_add(1, Ordering::SeqCst);
             }
         },
     );

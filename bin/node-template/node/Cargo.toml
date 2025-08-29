@@ -37,6 +37,9 @@ sp-timestamp = { version = "4.0.0-dev", path = "../../../primitives/timestamp" }
 sp-inherents = { version = "4.0.0-dev", path = "../../../primitives/inherents" }
 sp-keyring = { version = "24.0.0", path = "../../../primitives/keyring" }
 sp-keystore = { version = "0.27.0", path = "../../../primitives/keystore" }
+sp-consensus = { version = "0.10.0-dev", path = "../../../primitives/consensus/common" }
+parity-scale-codec = { version = "3.6.1" }
+async-trait = "0.1.57"
 frame-system = { version = "4.0.0-dev", path = "../../../frame/system" }
 pallet-transaction-payment = { version = "4.0.0-dev", default-features = false, path = "../../../frame/transaction-payment" }
 
