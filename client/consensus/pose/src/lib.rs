@@ -501,7 +501,7 @@ pub struct Proposal {
     pub block_hash: H256,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+#[derive(Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
 pub struct Vote {
     pub kind: VoteKind,
     pub round: u64,

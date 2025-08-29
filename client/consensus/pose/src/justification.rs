@@ -5,7 +5,7 @@ use sc_client_api::backend::{Backend as ClientBackend, Finalizer};
 use sc_consensus::block_import::JustificationImport;
 use sp_blockchain::HeaderBackend;
 use sp_consensus::Error as ConsensusError;
-use sp_runtime::{traits::Block as BlockT, Justification, NumberFor};
+use sp_runtime::{traits::{Block as BlockT, NumberFor}, Justification};
 
 /// Minimal PoSE justification import: finalizes blocks when a justification is provided.
 pub struct PoseJustificationImport<Client, Block, CB> {
@@ -37,4 +37,3 @@ where
         Ok(())
     }
 }
-
