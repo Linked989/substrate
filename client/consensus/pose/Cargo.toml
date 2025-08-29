@@ -1,0 +1,26 @@
+[package]
+name = "sc-consensus-pose"
+version = "0.1.0"
+edition = "2021"
+description = "PoSE consensus utilities: app crypto key types and engine id"
+license = "GPL-3.0-or-later WITH Classpath-exception-2.0"
+
+[dependencies]
+sc-consensus = { version = "0.10.0-dev", path = "../common" }
+sp-runtime = { version = "24.0.0", path = "../../../primitives/runtime" }
+sp-core = { version = "21.0.0", path = "../../../primitives/core" }
+sc-network = { version = "0.10.0-dev", path = "../../network" }
+sc-client-api = { version = "4.0.0-dev", path = "../../api" }
+sc-transaction-pool = { version = "4.0.0-dev", path = "../../transaction-pool" }
+sp-blockchain = { version = "4.0.0-dev", path = "../../../primitives/blockchain" }
+sp-block-builder = { version = "4.0.0-dev", path = "../../../primitives/block-builder" }
+parity-scale-codec = { version = "3.6.1", features = ["derive"] }
+bls12_381 = "0.8"
+schnorrkel = "0.10"
+sp-application-crypto = { version = "25.0.0", path = "../../../primitives/application-crypto" }
+thiserror = "1.0"
+
+[lib]
+name = "sc_consensus_pose"
+path = "src/lib.rs"
+crate-type = ["rlib"]

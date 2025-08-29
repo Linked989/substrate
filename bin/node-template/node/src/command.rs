@@ -94,10 +94,8 @@ pub fn run() -> sc_cli::Result<()> {
 			runner.async_run(|config| {
 				let PartialComponents { client, task_manager, backend, .. } =
 					service::new_partial(&config)?;
-				let aux_revert = Box::new(|client, _, blocks| {
-					sc_consensus_grandpa::revert(client, blocks)?;
-					Ok(())
-				});
+				// No GRANDPA to revert; perform no-op auxiliary revert.
+				let aux_revert = Box::new(|_client, _backend, _blocks| -> sc_cli::Result<()> { Ok(()) });
 				Ok((cmd.run(client, backend, Some(aux_revert)), task_manager))
 			})
 		},

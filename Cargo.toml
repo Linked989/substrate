@@ -74,6 +74,7 @@ members = [
 	"client/consensus/grandpa",
 	"client/consensus/grandpa/rpc",
 	"client/consensus/manual-seal",
+	"client/consensus/pose",
 	"client/consensus/pow",
 	"client/consensus/slots",
 	"client/db",
