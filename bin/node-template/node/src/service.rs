@@ -16,6 +16,7 @@ use sc_consensus::{
 use sp_consensus::Error as ConsensusError;
 use parity_scale_codec::Decode;
 use sp_core::H256;
+use sp_core::crypto::ByteArray; // for to_raw_vec on Public keys
 use sp_core::Pair; // for Pair::from_string on app-crypto pairs
 use sc_service::config::Role;
 use sc_service::KeystoreContainer;
@@ -329,8 +330,8 @@ fn ensure_dev_pose_keys(keystore: &KeystoreContainer, who: &str) {
     let vrf_pub = vrf.public();
     let bls_pub = bls.public();
 
-    let need_vrf = !store.has_keys(&[(vrf_pub.as_ref().to_vec(), pose_vrf::KEY_TYPE)]);
-    let need_bls = !store.has_keys(&[(bls_pub.as_ref().to_vec(), pose_bls::KEY_TYPE)]);
+    let need_vrf = !store.has_keys(&[(vrf_pub.to_raw_vec(), pose_vrf::KEY_TYPE)]);
+    let need_bls = !store.has_keys(&[(bls_pub.to_raw_vec(), pose_bls::KEY_TYPE)]);
 
     if need_vrf {
         let _ = store.insert(pose_vrf::KEY_TYPE, &who.to_string(), vrf_pub.as_ref());
