@@ -270,13 +270,11 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
         let keystore = keystore_container.keystore();
         for who in [Sr25519Keyring::Alice, Sr25519Keyring::Bob, Sr25519Keyring::Charlie] {
             let suri = format!("//{}", who);
-            let _ = sp_keystore::SyncCryptoStore::sr25519_generate_new(
-                &*keystore,
+            let _ = keystore.sr25519_generate_new(
                 sc_consensus_pose::pose_vrf::KEY_TYPE,
                 Some(&suri),
             );
-            let _ = sp_keystore::SyncCryptoStore::ed25519_generate_new(
-                &*keystore,
+            let _ = keystore.ed25519_generate_new(
                 sc_consensus_pose::pose_bls::KEY_TYPE,
                 Some(&suri),
             );
