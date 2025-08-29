@@ -7,8 +7,10 @@ license = "GPL-3.0-or-later WITH Classpath-exception-2.0"
 
 [dependencies]
 sc-consensus = { version = "0.10.0-dev", path = "../common" }
+sp-consensus = { version = "0.10.0-dev", path = "../../../primitives/consensus/common" }
 sp-runtime = { version = "24.0.0", path = "../../../primitives/runtime" }
 sp-core = { version = "21.0.0", path = "../../../primitives/core" }
+sp-api = { version = "4.0.0-dev", path = "../../../primitives/api" }
 sc-network = { version = "0.10.0-dev", path = "../../network" }
 sc-client-api = { version = "4.0.0-dev", path = "../../api" }
 sc-transaction-pool = { version = "4.0.0-dev", path = "../../transaction-pool" }
@@ -26,6 +28,8 @@ sp-timestamp = { version = "4.0.0-dev", path = "../../../primitives/timestamp" }
 futures-timer = "3"
 futures = "0.3"
 sc-network-common = { version = "0.10.0-dev", path = "../../network/common" }
+log = "0.4"
+libp2p = "0.51.3"
 
 [lib]
 name = "sc_consensus_pose"

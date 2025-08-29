@@ -5,9 +5,9 @@
 use parity_scale_codec::{Decode, Encode};
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet};
-use futures::StreamExt as _;
+use futures::{StreamExt as _, FutureExt as _};
 use sc_network::NetworkService;
-use sc_network_common::ExHashT;
+use libp2p::PeerId;
 use sc_network::config::NonDefaultSetConfig;
 use sc_network::types::ProtocolName;
 use sp_core::{crypto::KeyTypeId, H256};
@@ -276,7 +276,7 @@ impl PoSEProposer {
 use sc_consensus::import_queue::{BasicQueue, DefaultImportQueue, Verifier as ImportVerifier};
 use sc_consensus::import_queue::{BoxBlockImport, BoxJustificationImport};
 use sp_runtime::traits::Block as BlockT;
-use sc_block_builder::{BlockBuilderProvider, RecordProof};
+use sc_block_builder::{BlockBuilderProvider, RecordProof, BlockBuilderApi};
 use sp_blockchain::HeaderBackend;
 use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_inherents::InherentData;
@@ -365,6 +365,9 @@ pub fn build_import_queue<B: BlockT>(
     let verifier = PoSEVerifier { expected_epoch, expected_round, committee_size };
     BasicQueue::new(verifier, block_import, justification_import, spawner, registry)
 }
+
+pub mod justification;
+pub use justification::PoseJustificationImport;
 
 /// Construct a PoSE justification importer which finalizes blocks when PoSE justifications arrive.
 pub fn justification_import<B, C, CB>(client: Arc<C>) -> sc_consensus::import_queue::BoxJustificationImport<B>
@@ -525,10 +528,9 @@ pub enum WireMsg {
     AggVote(AggVote),
 }
 
-fn broadcast<B, H>(network: &NetworkService<B, H>, peers: &Vec<H::PeerId>, protocol: &ProtocolName, msg: WireMsg)
+fn broadcast<B>(network: &NetworkService<B, H256>, peers: &Vec<PeerId>, protocol: &ProtocolName, msg: WireMsg)
 where
     B: BlockT + 'static,
-    H: ExHashT,
 {
     let payload = msg.encode();
     for p in peers.iter().cloned() {
@@ -550,7 +552,7 @@ pub struct StartParams<B: BlockT, BI, C, TP> {
     pub local_id: sp_core::H256,
     pub slot_duration: Duration,
     pub _phantom: core::marker::PhantomData<B>,
-    pub network: Arc<NetworkService<B, sc_network::config::ExHash>>,
+    pub network: Arc<NetworkService<B, H256>>,
 }
 
 /// Start a very simple slot-based authoring loop that produces blocks periodically.
@@ -560,7 +562,7 @@ where
     B: BlockT + 'static,
     BI: sc_consensus::block_import::BlockImport<B, Error = sp_consensus::Error> + Send + Sync + 'static,
     C: BlockBuilderProvider<CB, B, C> + HeaderBackend<B> + ProvideRuntimeApi<B> + Send + Sync + 'static,
-    C::Api: ApiExt<B> + sp_block_builder::BlockBuilderApi<B>,
+    C::Api: ApiExt<B> + BlockBuilderApi<B>,
     CB: sc_client_api::backend::Backend<B> + Send + Sync + 'static,
     TP: sc_transaction_pool_api::TransactionPool<Block = B> + 'static,
 {
